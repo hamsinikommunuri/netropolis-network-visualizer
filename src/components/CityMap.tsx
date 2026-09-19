@@ -342,6 +342,27 @@ export const CityMap: React.FC<CityMapProps> = ({
             const coord = getPacketCoord(packet);
             const isTcp = packet.protocol === 'TCP';
 
+            if (packet.isAck) {
+              // ACK return vehicle (Cute Green Mini Courier)
+              return (
+                <g
+                  key={packet.id}
+                  transform={`translate(${coord.x}, ${coord.y}) rotate(${coord.angle})`}
+                  className="car-bobbing"
+                >
+                  <rect x="-8" y="-4" width="16" height="8" rx="2" fill="#10B981" stroke="#047857" strokeWidth="0.8" />
+                  <rect x="-6" y="-2.5" width="12" height="5" rx="1" fill="#D1FAE5" />
+                  <text x="0" y="2" fill="#065F46" fontSize="6" fontWeight="bold" textAnchor="middle">
+                    ACK
+                  </text>
+                  <circle cx="-5" cy="-4" r="1.2" fill="#1E293B" />
+                  <circle cx="5" cy="-4" r="1.2" fill="#1E293B" />
+                  <circle cx="-5" cy="4" r="1.2" fill="#1E293B" />
+                  <circle cx="5" cy="4" r="1.2" fill="#1E293B" />
+                </g>
+              );
+            }
+
             if (packet.status === 'lost') {
               // Show cute lost vehicle with smoke/hazard
               return (
@@ -353,6 +374,21 @@ export const CityMap: React.FC<CityMapProps> = ({
                   </text>
                   <text x="0" y="-12" fill="#DC2626" fontSize="8" fontWeight="bold" textAnchor="middle">
                     Lost ({packet.lossReason || 'Drop'})
+                  </text>
+                </g>
+              );
+            }
+
+            if (packet.status === 'waiting-ack') {
+              // Waiting for ACK status badge
+              return (
+                <g key={packet.id} transform={`translate(${coord.x}, ${coord.y})`}>
+                  <circle cx="0" cy="0" r="9" fill="#FEF3C7" stroke="#F59E0B" strokeWidth="1.5" />
+                  <text x="0" y="3" fill="#B45309" fontSize="8" fontWeight="bold" textAnchor="middle">
+                    ⏱️
+                  </text>
+                  <text x="0" y="-11" fill="#B45309" fontSize="7" fontWeight="bold" textAnchor="middle">
+                    Waiting ACK
                   </text>
                 </g>
               );
@@ -370,7 +406,8 @@ export const CityMap: React.FC<CityMapProps> = ({
               );
             }
 
-            // Normal In-Transit Vehicle
+            // Normal In-Transit or Retransmitting Vehicle
+            const isRetrying = packet.status === 'retransmitting' || packet.retryCount > 0;
             return (
               <g
                 key={packet.id}
@@ -379,16 +416,25 @@ export const CityMap: React.FC<CityMapProps> = ({
               >
                 {/* Vehicle Chassis */}
                 {isTcp ? (
-                  // TCP Vehicle: Cute Pastel Blue Mini Delivery Van
+                  // TCP Vehicle: Cute Pastel Blue Mini Delivery Van (or amber if retransmitting)
                   <g>
                     {/* Shadow */}
                     <rect x="-11" y="-6" width="22" height="12" rx="4" fill="#000000" opacity="0.12" />
                     {/* Body */}
-                    <rect x="-10" y="-5.5" width="20" height="11" rx="3" fill="#3B82F6" stroke="#1D4ED8" strokeWidth="0.8" />
+                    <rect
+                      x="-10"
+                      y="-5.5"
+                      width="20"
+                      height="11"
+                      rx="3"
+                      fill={isRetrying ? '#F59E0B' : '#3B82F6'}
+                      stroke={isRetrying ? '#B45309' : '#1D4ED8'}
+                      strokeWidth="0.8"
+                    />
                     {/* Windshield */}
-                    <rect x="2" y="-4" width="5" height="8" rx="1.5" fill="#DBEAFE" />
+                    <rect x="2" y="-4" width="5" height="8" rx="1.5" fill={isRetrying ? '#FEF3C7' : '#DBEAFE'} />
                     {/* Roof Cargo Box (Packet Payload indicator) */}
-                    <rect x="-8" y="-3.5" width="8" height="7" rx="1" fill="#93C5FD" />
+                    <rect x="-8" y="-3.5" width="8" height="7" rx="1" fill={isRetrying ? '#FDE68A' : '#93C5FD'} />
                     {/* Wheels */}
                     <circle cx="-6" cy="-6" r="1.8" fill="#1E293B" />
                     <circle cx="5" cy="-6" r="1.8" fill="#1E293B" />
@@ -419,7 +465,7 @@ export const CityMap: React.FC<CityMapProps> = ({
                   </g>
                 )}
 
-                {/* Packet ID tooltip bubble when hovered */}
+                {/* Packet ID tooltip bubble when hovered / active */}
                 <text
                   x="0"
                   y="-8"
@@ -429,7 +475,7 @@ export const CityMap: React.FC<CityMapProps> = ({
                   textAnchor="middle"
                   transform={`rotate(${-coord.angle})`}
                 >
-                  {isTcp ? 'TCP' : 'UDP'}
+                  {isRetrying ? 'RETRY' : isTcp ? 'TCP' : 'UDP'}
                 </text>
               </g>
             );

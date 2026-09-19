@@ -10,6 +10,7 @@ import {
   ProtocolType,
   RoutingMode,
   ScenarioPreset,
+  IncidentFlowState,
 } from '@/types/network';
 import { INITIAL_NODES, INITIAL_LINKS } from '@/lib/networkTopology';
 import { findRouteDijkstra, evaluateRouteDetails } from '@/lib/routing';
@@ -22,10 +23,12 @@ import { HealthScore } from '@/components/HealthScore';
 import { RouteComparisonPanel } from '@/components/RouteComparisonPanel';
 import { IncidentTimeline } from '@/components/IncidentTimeline';
 import { PacketExplorer } from '@/components/PacketExplorer';
-import { AnalyticsView } from '@/components/AnalyticsView';
+import { AnalyticsView, HistoryPoint } from '@/components/AnalyticsView';
 import { SimulationLab } from '@/components/SimulationLab';
 import { AboutView } from '@/components/AboutView';
 import { LearningModal } from '@/components/LearningModal';
+import { IncidentFlowBanner } from '@/components/IncidentFlowBanner';
+import { ProtocolComparisonBanner } from '@/components/ProtocolComparisonBanner';
 
 export default function Home() {
   // Intro state
@@ -42,11 +45,15 @@ export default function Home() {
   const [bandwidthMultiplier, setBandwidthMultiplier] = useState<number>(1.0);
   const [congestionMultiplier, setCongestionMultiplier] = useState<number>(1.0);
   const [lossRate, setLossRate] = useState<number>(0.0);
+  const [baseLatencyMultiplier, setBaseLatencyMultiplier] = useState<number>(1.0);
+  const [burstPacketCount, setBurstPacketCount] = useState<number>(5);
 
   // Network Elements
   const [nodes, setNodes] = useState<RouterNode[]>(INITIAL_NODES);
   const [links, setLinks] = useState<NetworkLink[]>(INITIAL_LINKS);
   const [packets, setPackets] = useState<SimulationPacket[]>([]);
+  // Persistent packet buffer for Packet Explorer (retains last 80 packets without expiring)
+  const [packetHistory, setPacketHistory] = useState<SimulationPacket[]>([]);
 
   // Selection states
   const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null);
@@ -55,6 +62,17 @@ export default function Home() {
 
   // Educational Modal
   const [learningModalOpen, setLearningModalOpen] = useState<boolean>(false);
+
+  // Incident Live Transition Flow (Requirement 12 & 13)
+  const [incidentFlow, setIncidentFlow] = useState<IncidentFlowState>({
+    active: false,
+    stage: 'idle',
+    incidentTitle: 'System Normal',
+    previousRoute: ['C-A', 'R1', 'R3', 'R6', 'S-B'],
+    newRoute: ['C-A', 'R1', 'R2', 'R5', 'S-A'],
+    message: 'All network roads and intersections operational.',
+    timestamp: '00:00',
+  });
 
   // Statistics
   const [stats, setStats] = useState<SimulationStats>({
@@ -69,21 +87,11 @@ export default function Home() {
     activeRouteChanges: 0,
     failedRoutersCount: 0,
     failedLinksCount: 0,
+    baseLatencyMs: 8,
   });
 
   // History buffer for telemetry charts
-  const [history, setHistory] = useState<
-    {
-      timestamp: string;
-      throughput: number;
-      avgDelay: number;
-      lossRate: number;
-      congestion: number;
-      health: number;
-      tcpCount: number;
-      udpCount: number;
-    }[]
-  >([]);
+  const [history, setHistory] = useState<HistoryPoint[]>([]);
 
   // Incident log
   const [incidents, setIncidents] = useState<IncidentEvent[]>([
@@ -109,7 +117,7 @@ export default function Home() {
 
   // Format timestamp MM:SS
   const getSimTimestamp = () => {
-    const s = simulationTimeSeconds.current;
+    const s = Math.floor(simulationTimeSeconds.current);
     const mins = Math.floor(s / 60);
     const secs = s % 60;
     return `${mins.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}`;
@@ -157,6 +165,61 @@ export default function Home() {
     return Math.max(5, Math.min(100, Math.round(score)));
   }, [nodes, links, stats.generated, stats.lost]);
 
+  // Trigger step-by-step incident transition sequence (Requirement 12)
+  const triggerIncidentSequence = useCallback(
+    (incidentTitle: string, failedEntityId: string) => {
+      const prevPath = findRouteDijkstra(nodes, links, 'C-A', 'S-A', routingMode)?.path || [
+        'C-A',
+        'R1',
+        'R3',
+        'R6',
+        'S-B',
+      ];
+
+      // Step 1 & 2: Failure Event
+      setIncidentFlow({
+        active: true,
+        stage: 'failed',
+        incidentTitle,
+        previousRoute: prevPath,
+        newRoute: [],
+        message: `${incidentTitle.toUpperCase()} — Packets in transit on this corridor are dropped.`,
+        timestamp: getSimTimestamp(),
+      });
+
+      // Step 3: Searching
+      setTimeout(() => {
+        setIncidentFlow((cur) => ({
+          ...cur,
+          stage: 'searching',
+          message: 'Searching for alternate detour route via dynamic graph recalculation...',
+        }));
+      }, 1200);
+
+      // Step 4: Rerouted
+      setTimeout(() => {
+        const altResult = findRouteDijkstra(nodes, links, 'C-A', 'S-A', routingMode);
+        const newPath = altResult?.path || ['C-A', 'R1', 'R2', 'R5', 'S-A'];
+        setIncidentFlow((cur) => ({
+          ...cur,
+          stage: 'rerouted',
+          newRoute: newPath,
+          message: `Traffic corridor redirected: ${newPath.join(' → ')}`,
+        }));
+      }, 2600);
+
+      // Step 5: Network Recovered / Stabilized
+      setTimeout(() => {
+        setIncidentFlow((cur) => ({
+          ...cur,
+          stage: 'recovered',
+          message: 'NETWORK RECOVERED: New steady state established. Traffic flow stabilized.',
+        }));
+      }, 5500);
+    },
+    [nodes, links, routingMode]
+  );
+
   // Toggle Router Failure
   const handleToggleNodeFail = useCallback(
     (nodeId: string) => {
@@ -172,6 +235,11 @@ export default function Home() {
                 : `Node ${nodeId} (${n.name}) restored to operational service.`,
               nodeId
             );
+
+            if (willFail) {
+              triggerIncidentSequence(`Router ${nodeId} Failed`, nodeId);
+            }
+
             return {
               ...n,
               status: willFail ? 'failed' : 'online',
@@ -182,7 +250,7 @@ export default function Home() {
         })
       );
     },
-    [logIncident]
+    [logIncident, triggerIncidentSequence]
   );
 
   // Toggle Link Road Failure
@@ -200,13 +268,18 @@ export default function Home() {
                 : `Link ${l.source} ↔ ${l.target} cleared for traffic flow.`,
               linkId
             );
+
+            if (willFail) {
+              triggerIncidentSequence(`Road ${l.name} Closed`, linkId);
+            }
+
             return { ...l, failed: willFail, status: willFail ? 'failed' : 'normal' };
           }
           return l;
         })
       );
     },
-    [logIncident]
+    [logIncident, triggerIncidentSequence]
   );
 
   // Trigger sudden congestion spike on central highway
@@ -225,7 +298,8 @@ export default function Home() {
       'Roads R1-R3 and R3-R5 reached 96% utilization. Congestion penalties surging.',
       'R3 Central Crossway'
     );
-  }, [logIncident]);
+    triggerIncidentSequence('Central Highway Congestion Spike', 'R1_R3');
+  }, [logIncident, triggerIncidentSequence]);
 
   // Restore entire network
   const handleRestoreAll = useCallback(() => {
@@ -236,11 +310,21 @@ export default function Home() {
       'All City Infrastructure Restored',
       'All closed intersections and roadways re-opened to normal traffic.'
     );
+    setIncidentFlow({
+      active: true,
+      stage: 'recovered',
+      incidentTitle: 'System Restored',
+      previousRoute: ['C-A', 'R1', 'R2', 'R5', 'S-A'],
+      newRoute: ['C-A', 'R1', 'R3', 'R5', 'S-A'],
+      message: 'NETWORK RECOVERED: All core intersections and arterials fully operational.',
+      timestamp: getSimTimestamp(),
+    });
   }, [logIncident]);
 
   // Reset entire metrics
   const handleReset = useCallback(() => {
     setPackets([]);
+    setPacketHistory([]);
     setStats({
       generated: 0,
       delivered: 0,
@@ -253,28 +337,37 @@ export default function Home() {
       activeRouteChanges: 0,
       failedRoutersCount: 0,
       failedLinksCount: 0,
+      baseLatencyMs: 8,
     });
     setTcpTotal(0);
     setUdpTotal(0);
     setTcpDelivered(0);
     setUdpDelivered(0);
     setHistory([]);
+    setIncidentFlow({
+      active: false,
+      stage: 'idle',
+      incidentTitle: 'System Normal',
+      previousRoute: [],
+      newRoute: [],
+      message: 'Telemetry metrics cleared.',
+      timestamp: '00:00',
+    });
     logIncident('recovered', 'Telemetry Statistics Reset', 'Packet counters cleared.');
   }, [logIncident]);
 
   // Spawn a new simulated packet vehicle
   const spawnPacket = useCallback(
-    (customProto?: ProtocolType) => {
+    (customProto?: ProtocolType, forcedSource?: string, forcedTarget?: string) => {
       const activeProto = customProto || protocol;
       const sources = ['C-A', 'C-B'];
       const targets = ['S-A', 'S-B'];
-      const sourceId = sources[Math.floor(Math.random() * sources.length)];
-      const targetId = targets[Math.floor(Math.random() * targets.length)];
+      const sourceId = forcedSource || sources[Math.floor(Math.random() * sources.length)];
+      const targetId = forcedTarget || targets[Math.floor(Math.random() * targets.length)];
 
       const routeResult = findRouteDijkstra(nodes, links, sourceId, targetId, routingMode);
 
       if (!routeResult || routeResult.path.length < 2) {
-        // No path viable
         logIncident(
           'packet_loss',
           'Packet Transmission Blocked',
@@ -284,7 +377,6 @@ export default function Home() {
         return null;
       }
 
-      // Check if routing changed from previous
       const routeStr = routeResult.path.join('-');
       if (lastRouteRef.current && lastRouteRef.current !== routeStr) {
         setStats((prev) => ({ ...prev, activeRouteChanges: prev.activeRouteChanges + 1 }));
@@ -300,6 +392,9 @@ export default function Home() {
       packetIdCounter.current += 1;
       const newId = `#P${packetIdCounter.current}`;
 
+      const baseSpeed = activeProto === 'UDP' ? 0.045 : 0.035;
+      const adjustedSpeed = Math.max(0.015, Math.min(0.08, baseSpeed / baseLatencyMultiplier));
+
       const newPacket: SimulationPacket = {
         id: newId,
         protocol: activeProto,
@@ -308,7 +403,7 @@ export default function Home() {
         path: routeResult.path,
         currentPathIndex: 0,
         progress: 0,
-        speed: activeProto === 'UDP' ? 0.045 : 0.035, // UDP is faster
+        speed: adjustedSpeed,
         status: 'in-transit',
         sequenceNumber: packetIdCounter.current,
         sizeBytes: activeProto === 'TCP' ? 1024 : 512,
@@ -319,7 +414,12 @@ export default function Home() {
         color: activeProto === 'TCP' ? '#3B82F6' : '#EC4899',
       };
 
-      setPackets((prev) => [...prev.slice(-30), newPacket]);
+      // Add to live moving packets
+      setPackets((prev) => [...prev.slice(-35), newPacket]);
+
+      // Add to persistent packet history for Packet Explorer (retaining last 80)
+      setPacketHistory((prev) => [newPacket, ...prev.slice(0, 79)]);
+
       setStats((prev) => ({ ...prev, generated: prev.generated + 1 }));
 
       if (activeProto === 'TCP') {
@@ -330,25 +430,138 @@ export default function Home() {
 
       return newPacket;
     },
-    [nodes, links, protocol, routingMode, logIncident]
+    [nodes, links, protocol, routingMode, baseLatencyMultiplier, logIncident]
   );
 
-  // Burst traffic helper
+  // Burst traffic helper (uses burstPacketCount)
   const handleBurstTraffic = useCallback(
-    (count: number) => {
-      for (let i = 0; i < count; i++) {
+    (count?: number) => {
+      const actualCount = count || burstPacketCount;
+      for (let i = 0; i < actualCount; i++) {
         setTimeout(() => {
           spawnPacket();
         }, i * 140);
       }
       logIncident(
         'congestion',
-        `Traffic Burst Dispatched (${count} vehicles)`,
-        `Injected ${count} concurrent packet vehicles into residential entry points.`
+        `Traffic Generated (${actualCount} vehicles)`,
+        `Injected ${actualCount} concurrent packet vehicles into residential entry points.`
       );
     },
-    [spawnPacket, logIncident]
+    [burstPacketCount, spawnPacket, logIncident]
   );
+
+  // Full Incident Replay Sequence (Requirement 13)
+  const handleReplayIncident = useCallback(() => {
+    // 1. Reset network to healthy baseline
+    handleRestoreAll();
+
+    // 2. Dispatch baseline packet
+    setTimeout(() => {
+      spawnPacket('TCP', 'C-A', 'S-A');
+    }, 400);
+
+    // 3. Inject R3 failure after 1.5s
+    setTimeout(() => {
+      handleToggleNodeFail('R3');
+    }, 1600);
+
+    // 4. Dispatch new packet along northern detour
+    setTimeout(() => {
+      spawnPacket('TCP', 'C-A', 'S-A');
+      spawnPacket('TCP', 'C-B', 'S-B');
+    }, 3800);
+
+    // 5. Restore network after 7s
+    setTimeout(() => {
+      handleRestoreAll();
+    }, 7500);
+  }, [handleRestoreAll, handleToggleNodeFail, spawnPacket]);
+
+  // Demonstrate TCP Sequence: Drop at R3 -> Wait for ACK -> Retransmit -> Delivered -> Return ACK (Requirement 9)
+  const handleRunTcpDemo = useCallback(() => {
+    setProtocol('TCP');
+    logIncident(
+      'reroute',
+      'TCP Protocol Reliability Demonstration',
+      'Demonstrating packet transmission, ACK wait, retransmission timeout, and return receipt.'
+    );
+
+    // Dispatch TCP packet
+    const pkt = spawnPacket('TCP', 'C-A', 'S-A');
+    if (!pkt) return;
+
+    // Simulate drop on route after 1.2s
+    setTimeout(() => {
+      setPackets((prev) =>
+        prev.map((p) => {
+          if (p.id === pkt.id && p.status === 'in-transit') {
+            return {
+              ...p,
+              status: 'waiting-ack',
+              lossReason: 'ACK Timeout Simulation',
+              waitingForAckUntil: Date.now() + 1000,
+            };
+          }
+          return p;
+        })
+      );
+      logIncident('packet_loss', `TCP Packet ${pkt.id} Lost`, 'Waiting for ACK receipt... Timeout timer active.');
+    }, 1200);
+
+    // Trigger retransmission after 2.4s
+    setTimeout(() => {
+      const altRoute = findRouteDijkstra(nodes, links, 'C-A', 'S-A', 'congestion-aware');
+      if (altRoute) {
+        const retryPacket: SimulationPacket = {
+          ...pkt,
+          id: `${pkt.id}-R1`,
+          status: 'retransmitting',
+          path: altRoute.path,
+          currentPathIndex: 0,
+          progress: 0,
+          retryCount: 1,
+          createdAt: Date.now(),
+          elapsedMs: 35,
+          lossReason: 'TCP Retransmission after Timeout',
+        };
+        setPackets((prev) => [...prev, retryPacket]);
+        setPacketHistory((prev) => [retryPacket, ...prev.slice(0, 79)]);
+        setStats((s) => ({ ...s, retransmitted: s.retransmitted + 1 }));
+        logIncident('reroute', `TCP Retransmitting ${pkt.id}`, `Sender re-dispatched vehicle along alternate detour: ${altRoute.path.join(' → ')}`);
+      }
+    }, 2400);
+  }, [nodes, links, spawnPacket, logIncident]);
+
+  // Demonstrate UDP Sequence: Drop at R3 -> No ACK, No Retransmission (Requirement 9)
+  const handleRunUdpDemo = useCallback(() => {
+    setProtocol('UDP');
+    logIncident(
+      'packet_loss',
+      'UDP Best-Effort Demonstration',
+      'Demonstrating high-speed connectionless stream. Dropped datagrams have no ACK and no retransmission.'
+    );
+
+    const pkt = spawnPacket('UDP', 'C-B', 'S-B');
+    if (!pkt) return;
+
+    // Simulate drop on road after 1.0s
+    setTimeout(() => {
+      setPackets((prev) =>
+        prev.map((p) => {
+          if (p.id === pkt.id && p.status === 'in-transit') {
+            return {
+              ...p,
+              status: 'lost',
+              lossReason: 'UDP Buffer Drop (No Retransmission)',
+            };
+          }
+          return p;
+        })
+      );
+      logIncident('packet_loss', `UDP Datagram ${pkt.id} Lost`, 'No ACK requested. Packet remains lost without retry.');
+    }, 1000);
+  }, [spawnPacket, logIncident]);
 
   // Apply scenario preset from Simulation Lab
   const handleApplyScenario = useCallback(
@@ -376,11 +589,7 @@ export default function Home() {
         }))
       );
 
-      logIncident(
-        'reroute',
-        `Applied Scenario: ${preset.name}`,
-        preset.description
-      );
+      logIncident('reroute', `Applied Scenario: ${preset.name}`, preset.description);
     },
     [logIncident]
   );
@@ -396,12 +605,40 @@ export default function Home() {
         const nextPackets: SimulationPacket[] = [];
 
         for (const pkt of prevPackets) {
+          // Keep delivered / lost packets briefly on screen (2.0s) for visual satisfaction
           if (pkt.status === 'delivered' || pkt.status === 'lost') {
-            // Keep delivered/lost packets for brief visual feedback (2.5s) then discard
-            if (Date.now() - pkt.createdAt < 2500) {
+            if (Date.now() - pkt.createdAt < 2200) {
               nextPackets.push(pkt);
             }
             continue;
+          }
+
+          // Handle waiting-ack state
+          if (pkt.status === 'waiting-ack') {
+            if (pkt.waitingForAckUntil && Date.now() >= pkt.waitingForAckUntil) {
+              // Timeout expired! Retransmit
+              const newRoute = findRouteDijkstra(nodes, links, pkt.sourceId, pkt.targetId, routingMode);
+              if (newRoute) {
+                const retried: SimulationPacket = {
+                  ...pkt,
+                  status: 'retransmitting',
+                  path: newRoute.path,
+                  currentPathIndex: 0,
+                  progress: 0,
+                  retryCount: pkt.retryCount + 1,
+                  hops: [...pkt.hops, { nodeId: pkt.sourceId, timeMs: Math.round(pkt.elapsedMs + 25) }],
+                };
+                nextPackets.push(retried);
+                setPacketHistory((hist) =>
+                  hist.map((h) => (h.id === pkt.id ? { ...h, status: 'retransmitting', retryCount: pkt.retryCount + 1 } : h))
+                );
+                setStats((s) => ({ ...s, retransmitted: s.retransmitted + 1 }));
+                continue;
+              }
+            } else {
+              nextPackets.push(pkt);
+              continue;
+            }
           }
 
           const currentU = pkt.path[pkt.currentPathIndex];
@@ -417,18 +654,16 @@ export default function Home() {
           );
 
           if (!link || link.failed || nodeU?.status === 'failed' || nodeV?.status === 'failed') {
-            // Drop packet due to link/node failure
-            if (pkt.protocol === 'TCP' && pkt.retryCount < 2) {
+            if (pkt.protocol === 'TCP' && pkt.retryCount < 2 && !pkt.isAck) {
               // TCP Retransmission!
               logIncident(
                 'reroute',
                 `TCP ACK Timeout on ${pkt.id}`,
                 `Packet lost at closed ${currentU} ↔ ${nextV}. Retransmitting from ${pkt.sourceId}...`
               );
-              // Reroute from source
               const newRoute = findRouteDijkstra(nodes, links, pkt.sourceId, pkt.targetId, routingMode);
               if (newRoute) {
-                nextPackets.push({
+                const retryingPkt: SimulationPacket = {
                   ...pkt,
                   path: newRoute.path,
                   currentPathIndex: 0,
@@ -437,18 +672,26 @@ export default function Home() {
                   status: 'retransmitting',
                   lossReason: 'Link failure reroute',
                   hops: [{ nodeId: pkt.sourceId, timeMs: Math.round(pkt.elapsedMs + 20) }],
-                });
+                };
+                nextPackets.push(retryingPkt);
+                setPacketHistory((hist) =>
+                  hist.map((h) => (h.id === pkt.id ? { ...h, status: 'retransmitting', retryCount: pkt.retryCount + 1 } : h))
+                );
                 setStats((s) => ({ ...s, retransmitted: s.retransmitted + 1 }));
                 continue;
               }
             }
 
             // Otherwise lost
-            nextPackets.push({
+            const lostPkt: SimulationPacket = {
               ...pkt,
               status: 'lost',
               lossReason: 'Intersection/Road Closed',
-            });
+            };
+            nextPackets.push(lostPkt);
+            setPacketHistory((hist) =>
+              hist.map((h) => (h.id === pkt.id ? { ...h, status: 'lost', lossReason: 'Intersection/Road Closed' } : h))
+            );
             setStats((s) => ({ ...s, lost: s.lost + 1 }));
             continue;
           }
@@ -456,23 +699,31 @@ export default function Home() {
           // Random channel loss or artificial drop
           const totalLossProb = lossRate + link.packetLossRate;
           if (Math.random() < totalLossProb * 0.015) {
-            if (pkt.protocol === 'TCP' && pkt.retryCount < 2) {
-              nextPackets.push({
+            if (pkt.protocol === 'TCP' && pkt.retryCount < 2 && !pkt.isAck) {
+              const retryingPkt: SimulationPacket = {
                 ...pkt,
                 status: 'retransmitting',
                 progress: 0,
                 retryCount: pkt.retryCount + 1,
                 lossReason: 'Congestion buffer drop',
-              });
+              };
+              nextPackets.push(retryingPkt);
+              setPacketHistory((hist) =>
+                hist.map((h) => (h.id === pkt.id ? { ...h, status: 'retransmitting', retryCount: pkt.retryCount + 1 } : h))
+              );
               setStats((s) => ({ ...s, retransmitted: s.retransmitted + 1 }));
               continue;
             }
 
-            nextPackets.push({
+            const droppedPkt: SimulationPacket = {
               ...pkt,
               status: 'lost',
               lossReason: 'Buffer Exhaustion',
-            });
+            };
+            nextPackets.push(droppedPkt);
+            setPacketHistory((hist) =>
+              hist.map((h) => (h.id === pkt.id ? { ...h, status: 'lost', lossReason: 'Buffer Exhaustion' } : h))
+            );
             setStats((s) => ({ ...s, lost: s.lost + 1 }));
             continue;
           }
@@ -488,14 +739,27 @@ export default function Home() {
 
             if (nextHopIndex >= pkt.path.length - 1) {
               // Delivered at final destination server!
-              nextPackets.push({
+              const deliveredPkt: SimulationPacket = {
                 ...pkt,
                 currentPathIndex: nextHopIndex,
                 progress: 1.0,
                 status: 'delivered',
                 elapsedMs: updatedElapsed,
                 hops: [...pkt.hops, { nodeId: reachedNodeId, timeMs: updatedElapsed }],
-              });
+              };
+              nextPackets.push(deliveredPkt);
+              setPacketHistory((hist) =>
+                hist.map((h) =>
+                  h.id === pkt.id
+                    ? {
+                        ...h,
+                        status: 'delivered',
+                        elapsedMs: updatedElapsed,
+                        hops: [...pkt.hops, { nodeId: reachedNodeId, timeMs: updatedElapsed }],
+                      }
+                    : h
+                )
+              );
 
               setStats((s) => {
                 const newDelivered = s.delivered + 1;
@@ -511,18 +775,54 @@ export default function Home() {
 
               if (pkt.protocol === 'TCP') {
                 setTcpDelivered((d) => d + 1);
+
+                // Return ACK vehicle traveling back from destination server to client (Requirement 8 & 9)
+                if (!pkt.isAck) {
+                  const ackPacket: SimulationPacket = {
+                    id: `ACK-${pkt.id.replace('#', '')}`,
+                    protocol: 'TCP',
+                    sourceId: reachedNodeId,
+                    targetId: pkt.sourceId,
+                    path: [...pkt.path].reverse(),
+                    currentPathIndex: 0,
+                    progress: 0,
+                    speed: Math.min(0.08, pkt.speed * 1.5), // Fast lightweight return receipt
+                    status: 'ack-in-transit',
+                    sequenceNumber: pkt.sequenceNumber,
+                    sizeBytes: 64,
+                    createdAt: Date.now(),
+                    elapsedMs: 0,
+                    hops: [{ nodeId: reachedNodeId, timeMs: updatedElapsed }],
+                    isAck: true,
+                    retryCount: 0,
+                    color: '#10B981',
+                  };
+                  nextPackets.push(ackPacket);
+                }
               } else {
                 setUdpDelivered((d) => d + 1);
               }
             } else {
               // Intermediate intersection reached
-              nextPackets.push({
+              const hoppingPkt: SimulationPacket = {
                 ...pkt,
                 currentPathIndex: nextHopIndex,
                 progress: 0,
                 elapsedMs: updatedElapsed,
                 hops: [...pkt.hops, { nodeId: reachedNodeId, timeMs: updatedElapsed }],
-              });
+              };
+              nextPackets.push(hoppingPkt);
+              setPacketHistory((hist) =>
+                hist.map((h) =>
+                  h.id === pkt.id
+                    ? {
+                        ...h,
+                        currentPathIndex: nextHopIndex,
+                        hops: [...pkt.hops, { nodeId: reachedNodeId, timeMs: updatedElapsed }],
+                      }
+                    : h
+                )
+              );
 
               // Increment router processed count
               setNodes((prevNodes) =>
@@ -590,13 +890,19 @@ export default function Home() {
     return () => clearInterval(timer);
   }, [isRunning, packetRate, spawnPacket]);
 
-  // Telemetry buffer update every 1 second
+  // Telemetry buffer update every 1 second (tracks all 8 chart parameters)
   useEffect(() => {
     const timer = setInterval(() => {
       const hScore = computeHealthScore();
       const avgLoad =
         links.reduce((acc, l) => acc + (l.failed ? 100 : l.currentLoad), 0) / (links.length || 1);
       const curLoss = stats.generated > 0 ? (stats.lost / stats.generated) * 100 : 0;
+
+      const activeRouteEval = evaluateRouteDetails(
+        findRouteDijkstra(nodes, links, 'C-A', 'S-A', routingMode)?.path || ['C-A', 'R1', 'R3', 'S-A'],
+        nodes,
+        links
+      );
 
       const now = new Date();
       const timeStr = `${now.getHours().toString().padStart(2, '0')}:${now
@@ -613,6 +919,7 @@ export default function Home() {
           lossRate: Math.round(curLoss),
           congestion: Math.round(avgLoad),
           health: hScore,
+          routingCost: activeRouteEval.viable ? activeRouteEval.totalCost : 99,
           tcpCount: tcpTotal,
           udpCount: udpTotal,
         },
@@ -629,7 +936,7 @@ export default function Home() {
     }, 1000);
 
     return () => clearInterval(timer);
-  }, [computeHealthScore, links, nodes, stats.generated, stats.lost, stats.throughputKbps, stats.avgDelayMs, tcpTotal, udpTotal]);
+  }, [computeHealthScore, links, nodes, stats.generated, stats.lost, stats.throughputKbps, stats.avgDelayMs, routingMode, tcpTotal, udpTotal]);
 
   const activePathResult = findRouteDijkstra(nodes, links, 'C-A', 'S-A', routingMode);
   const activePath = activePathResult ? activePathResult.path : null;
@@ -660,6 +967,11 @@ export default function Home() {
           <MetricCards stats={stats} />
         )}
 
+        {/* Live Incident Flow Transition Banner (Visible on City & Controls when incident occurs) */}
+        {(activeTab === 'city' || activeTab === 'controls') && incidentFlow.active && (
+          <IncidentFlowBanner flowState={incidentFlow} />
+        )}
+
         {/* TAB 1: CITY VIEW (Centerpiece) */}
         {activeTab === 'city' && (
           <div className="space-y-6">
@@ -677,6 +989,13 @@ export default function Home() {
               protocol={protocol}
             />
 
+            {/* Protocol Comparison & Live Demo Banner */}
+            <ProtocolComparisonBanner
+              onRunTcpDemo={handleRunTcpDemo}
+              onRunUdpDemo={handleRunUdpDemo}
+              activeProtocol={protocol}
+            />
+
             {/* Bottom Row: Route Comparison & Incident Timeline & Health Gauge */}
             <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
               <div className="lg:col-span-5">
@@ -692,7 +1011,7 @@ export default function Home() {
               <div className="lg:col-span-4">
                 <IncidentTimeline
                   incidents={incidents}
-                  onReplayIncidents={() => handleBurstTraffic(4)}
+                  onReplayIncidents={handleReplayIncident}
                   onClearIncidents={() => setIncidents([])}
                 />
               </div>
@@ -704,10 +1023,10 @@ export default function Home() {
           </div>
         )}
 
-        {/* TAB 2: PACKET EXPLORER */}
+        {/* TAB 2: PACKET EXPLORER (Uses persistent packetHistory so packets never vanish) */}
         {activeTab === 'explorer' && (
           <PacketExplorer
-            packets={packets}
+            packets={packetHistory.length > 0 ? packetHistory : packets}
             selectedPacketId={selectedPacketId}
             onSelectPacket={(id) => setSelectedPacketId(id)}
           />
@@ -718,7 +1037,8 @@ export default function Home() {
           <div className="space-y-6">
             <TrafficControls
               isRunning={isRunning}
-              onToggleRunning={() => setIsRunning(!isRunning)}
+              onStartSimulation={() => setIsRunning(true)}
+              onPauseSimulation={() => setIsRunning(false)}
               packetRate={packetRate}
               onChangePacketRate={(val) => setPacketRate(val)}
               lossRate={lossRate}
@@ -727,15 +1047,19 @@ export default function Home() {
               onChangeCongestion={(val) => setCongestionMultiplier(val)}
               bandwidthMultiplier={bandwidthMultiplier}
               onChangeBandwidth={(val) => setBandwidthMultiplier(val)}
+              baseLatencyMultiplier={baseLatencyMultiplier}
+              onChangeBaseLatency={(val) => setBaseLatencyMultiplier(val)}
+              burstPacketCount={burstPacketCount}
+              onChangeBurstPacketCount={(val) => setBurstPacketCount(val)}
               protocol={protocol}
               onChangeProtocol={(p) => setProtocol(p)}
               routingMode={routingMode}
               onChangeRoutingMode={(m) => setRoutingMode(m)}
-              onBurstTraffic={handleBurstTraffic}
-              onTriggerCongestionSpike={handleTriggerCongestionSpike}
-              onFailCoreRouter={() => handleToggleNodeFail('R3')}
-              onFailCoreLink={() => handleToggleLinkFail('R1_R3')}
-              onRestoreAll={handleRestoreAll}
+              onGenerateTraffic={() => handleBurstTraffic()}
+              onCreateCongestion={handleTriggerCongestionSpike}
+              onFailRouter={() => handleToggleNodeFail('R3')}
+              onFailLink={() => handleToggleLinkFail('R1_R3')}
+              onRestoreNetwork={handleRestoreAll}
               onReset={handleReset}
             />
 
@@ -756,7 +1080,7 @@ export default function Home() {
           </div>
         )}
 
-        {/* TAB 4: ANALYTICS */}
+        {/* TAB 4: ANALYTICS (All 8 spec charts) */}
         {activeTab === 'analytics' && (
           <AnalyticsView
             history={history}

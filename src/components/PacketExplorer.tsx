@@ -46,7 +46,14 @@ export const PacketExplorer: React.FC<PacketExplorerProps> = ({
 
   const selectedPacket = packets.find((p) => p.id === selectedPacketId) || packets[0] || null;
 
-  const getStatusBadge = (status: SimulationPacket['status']) => {
+  const getStatusBadge = (status: SimulationPacket['status'], isAck?: boolean) => {
+    if (isAck) {
+      return (
+        <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-xs font-bold bg-[#D1FAE5] text-[#065F46] border border-[#6EE7B7]">
+          <CheckCircle2 className="w-3 h-3" /> Return ACK
+        </span>
+      );
+    }
     switch (status) {
       case 'delivered':
         return (
@@ -63,7 +70,13 @@ export const PacketExplorer: React.FC<PacketExplorerProps> = ({
       case 'retransmitting':
         return (
           <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-xs font-bold bg-[#FEF3C7] text-[#92400E] border border-[#FDE68A]">
-            <RotateCw className="w-3 h-3 animate-spin" /> Retransmitting
+            <RotateCw className="w-3 h-3 animate-spin" /> Retransmitted
+          </span>
+        );
+      case 'waiting-ack':
+        return (
+          <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-xs font-bold bg-[#FEF3C7] text-[#B45309] border border-[#FCD34D]">
+            <Clock className="w-3 h-3" /> Waiting ACK
           </span>
         );
       default:
@@ -150,7 +163,7 @@ export const PacketExplorer: React.FC<PacketExplorerProps> = ({
                         {pkt.protocol}
                       </span>
                     </div>
-                    {getStatusBadge(pkt.status)}
+                    {getStatusBadge(pkt.status, pkt.isAck)}
                   </div>
 
                   <div className="flex items-center justify-between text-[11px] text-[#64748B]">
@@ -174,7 +187,7 @@ export const PacketExplorer: React.FC<PacketExplorerProps> = ({
                 <div>
                   <div className="flex items-center gap-2">
                     <h3 className="text-lg font-bold text-[#2D3142]">{selectedPacket.id}</h3>
-                    {getStatusBadge(selectedPacket.status)}
+                    {getStatusBadge(selectedPacket.status, selectedPacket.isAck)}
                   </div>
                   <p className="text-xs text-[#7A8398]">Sequence #{selectedPacket.sequenceNumber}</p>
                 </div>

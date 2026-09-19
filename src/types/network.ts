@@ -3,7 +3,7 @@ export type NodeStatus = 'online' | 'failed' | 'congested';
 export type LinkStatus = 'normal' | 'busy' | 'heavy' | 'congested' | 'failed';
 export type ProtocolType = 'TCP' | 'UDP';
 export type RoutingMode = 'shortest-path' | 'congestion-aware';
-export type PacketStatus = 'in-transit' | 'delivered' | 'lost' | 'retransmitting';
+export type PacketStatus = 'in-transit' | 'delivered' | 'lost' | 'retransmitting' | 'waiting-ack' | 'ack-in-transit';
 
 export interface RouterNode {
   id: string;
@@ -61,6 +61,7 @@ export interface SimulationPacket {
   color: string;
   lossReason?: string;
   failurePoint?: string;
+  waitingForAckUntil?: number;
 }
 
 export interface SimulationStats {
@@ -75,6 +76,17 @@ export interface SimulationStats {
   activeRouteChanges: number;
   failedRoutersCount: number;
   failedLinksCount: number;
+  baseLatencyMs: number;
+}
+
+export interface IncidentFlowState {
+  active: boolean;
+  stage: 'idle' | 'failed' | 'searching' | 'rerouted' | 'recovered';
+  incidentTitle: string;
+  previousRoute: string[];
+  newRoute: string[];
+  message: string;
+  timestamp: string;
 }
 
 export interface IncidentEvent {
@@ -100,3 +112,4 @@ export interface ScenarioPreset {
   failedLinks: string[];
   recommendedFocus: string;
 }
+
