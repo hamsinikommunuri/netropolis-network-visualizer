@@ -36,3 +36,5 @@ next-env.d.ts
 # Compiled Java class files
 *.class
 java-socket-demo/*.class
+
+.vercel
