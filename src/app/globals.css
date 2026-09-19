@@ -1,0 +1,100 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  --font-serif: "Times New Roman", Times, Georgia, serif;
+}
+
+body {
+  font-family: var(--font-serif);
+  color: #2D3142;
+  background-color: #F8F9FC;
+  overflow-x: hidden;
+  margin: 0;
+  padding: 0;
+}
+
+/* Custom subtle scrollbar */
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+::-webkit-scrollbar-track {
+  background: #F1F3F7;
+  border-radius: 4px;
+}
+
+::-webkit-scrollbar-thumb {
+  background: #D2D8E3;
+  border-radius: 4px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: #B6BFCE;
+}
+
+/* Glassmorphism & Soft Card Utilities */
+.pastel-card {
+  background: rgba(255, 255, 255, 0.94);
+  backdrop-filter: blur(8px);
+  border: 1px solid #EAECEF;
+  border-radius: 16px;
+  box-shadow: 0 4px 20px -2px rgba(120, 130, 160, 0.07);
+}
+
+.pastel-card-subtle {
+  background: rgba(255, 255, 255, 0.85);
+  border: 1px solid #EFF1F5;
+  border-radius: 12px;
+}
+
+.pastel-glow {
+  box-shadow: 0 0 16px rgba(220, 235, 250, 0.7);
+}
+
+/* Animations */
+@keyframes dash {
+  to {
+    stroke-dashoffset: -40;
+  }
+}
+
+.animate-road-flow {
+  stroke-dasharray: 8 10;
+  animation: dash 1.8s linear infinite;
+}
+
+.animate-road-congested {
+  stroke-dasharray: 6 6;
+  animation: dash 0.6s linear infinite;
+}
+
+@keyframes pulse-ring {
+  0% {
+    transform: scale(0.95);
+    opacity: 0.8;
+  }
+  50% {
+    transform: scale(1.15);
+    opacity: 0.4;
+  }
+  100% {
+    transform: scale(0.95);
+    opacity: 0.8;
+  }
+}
+
+.pulse-node {
+  animation: pulse-ring 2.5s cubic-bezier(0.4, 0, 0.6, 1) infinite;
+}
+
+@keyframes car-wobble {
+  0%, 100% { transform: translateY(0); }
+  50% { transform: translateY(-1.5px); }
+}
+
+.car-bobbing {
+  animation: car-wobble 0.8s ease-in-out infinite;
+}
